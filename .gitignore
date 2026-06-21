@@ -1,0 +1,10 @@
+.vscode/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.sln
+*.suo
+*.zip
+build/*
+!build/build.bat
