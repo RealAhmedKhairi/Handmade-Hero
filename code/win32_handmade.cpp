@@ -6,21 +6,49 @@
 
 global_variable bool Running;
 
-internal void
-ResizeDIBSection(int Width, int Height)
-{
-   HBITMAP CreateDIBSection(
-      HDC hdc,
-      const BITMAPINFO *pbmi,
-      UINT usage,
-      VOID **ppvBits,
-      HANDLE hSection,
-      DWORD offset);
-}
-internal void
-UpdateThisWindow(HDC DeviceContext, int X, int Y, int Width, int Height) 
-{
+global_variable BITMAPINFO BitmapInfo;
+global_variable void *BitMapMemory;
+global_variable HDC BitmapDeviceContext;
+global_variable HBITMAP BitmapHandle;
 
+internal_function void
+Win32ResizeDIBSection(int Width, int Height)
+{
+   // We will try later to check if we don't free first but allocate.
+
+   if(BitmapHandle) 
+   {
+      DeleteObject(BitmapHandle);
+   } 
+   if(BitmapDeviceContext) 
+   {
+      HDC BitmapDeviceContext = CreateCompatibleDC(0);
+   }
+
+   BitmapInfo.bmiHeader.biSize = sizeof(BitmapInfo.bmiHeader);  
+   BitmapInfo.bmiHeader.biWidth = Width;
+   BitmapInfo.bmiHeader.biHeight = Height;
+   BitmapInfo.bmiHeader.biPlanes = 1;
+   BitmapInfo.bmiHeader.biBitCount = 32;
+   BitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+
+   BitmapHandle = CreateDIBSection(
+      BitmapDeviceContext,
+      BitmapInfo,
+      DIB_RGB_COLORS,
+      &BitMapMemory,
+      0, 0);
+
+}
+internal_function void
+Win32UpdateWindow(HDC DeviceContext, int X, int Y, int Width, int Height) 
+{
+   int StretchDIBits(DeviceContext, X, Y, Width, Height, 
+                     X, Y, Width, Height
+                     BitmapMemory,
+                     &BitmapInfo,
+                     DIB_RGB_COLORS, SRCCOPY);
 }
 
 LRESULT CALLBACK 
@@ -39,7 +67,7 @@ MainWindowCallback(HWND Window,
          BOOL GetClientRect(Window, &ClientRect);
          int Height = ClientRect.bottom -= ClientRect.top;
          int Width = ClientRect.right -= ClientRect.left;
-         ResizeDIBSection(Width, Height);
+         Win32ResizeDIBSection(Width, Height);
          OutputDebugStringA("WM_SIZE\n");
       } break;
 
@@ -67,7 +95,7 @@ MainWindowCallback(HWND Window,
          int Y = Paint.rcPaint.top;
          int Height = Paint.rcPaint.bottom -= Paint.rcPaint.top;
          int Width = Paint.rcPaint.right -= Paint.rcPaint.left;
-         UpdateThisWindow(DeviceContext, X, Y, Width, Height);
+         Win32UpdateWindow(DeviceContext, X, Y, Width, Height);
          EndPaint(Window, &Paint);
       } break;
       default:
