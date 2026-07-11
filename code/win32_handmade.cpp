@@ -6,83 +6,92 @@
 #define global_variable static 
 
 
-global_variable bool Running;
+typedef struct win32_buffer {
+   BITMAPINFO Info;
+   void *Memory;
+   int Width;
+   int Height;
+   int Pitch;
+   int BytesPerPixel;
+} Win32_buffer;
 
-global_variable BITMAPINFO BitmapInfo;
-global_variable void *BitmapMemory;
-global_variable int BitmapWidth;
-global_variable int BitmapHeight;
+global_variable bool Running;
+global_variable Win32_buffer BackBuffer;
+
 
 internal void 
-RenderPixels(int X_Offset, int Y_Offset) {
+RenderPixels(Win32_buffer Buffer, int X_Offset, int Y_Offset) {
    
-   int BytesPerPixel = 4;
-   int Width = BitmapWidth;
-   int Height = BitmapHeight;
+   int Width = Buffer.Width;
+   int Height = Buffer.Height;
 
-   int Pitch = Width * BytesPerPixel;
-   uint8_t *Row = (uint8_t *)BitmapMemory;
-   for(int Y = 0; Y < BitmapHeight; Y++) 
+   uint8_t *Row = (uint8_t *)Buffer.Memory;
+   for(int Y = 0; Y < Height; Y++) 
    {
-      uint8_t *Pixel = (uint8_t *)Row;
-      for (int X = 0; X < BitmapWidth; X++) 
+      uint32_t *Pixel = (uint32_t *)Row;
+      // Note that here the first pixel is blue, becuase of the little Endiane CPU architecture
+      // 0 x xxRRGGBB -> Start the the least significant bit. 
+      
+      for (int X = 0; X < Width; X++) 
       {
-         *Pixel = (uint8_t) X + X_Offset;
-         Pixel++;
+         if (((X / 32) + (Y / 32)) % 2 == 0) 
+         {
+            *Pixel = 0xffffff;
+            Pixel++;   
+         } else {
+            *Pixel = 0x000000 ;
+            Pixel++;
+         }
          
-         *Pixel = (uint8_t) Y + Y_Offset;
-         Pixel++;
-
-         *Pixel = 0;
-         Pixel++;
-
-         *Pixel = 0;
-         Pixel++;
       }
-      Row += Pitch;
+      Row += Buffer.Pitch;
    }
 }
 
 internal void
-Win32ResizeDIBSection(int Width, int Height)
+Win32ResizeDIBSection(Win32_buffer *Buffer, int Width, int Height)
 {
    // We will try later to check if we don't free first but allocate.
    
-   BitmapWidth = Width;
-   BitmapHeight = Height;
-   
-   if(BitmapMemory) {
-      VirtualFree(BitmapMemory, 0, MEM_RELEASE);
-   }
-   
-   BitmapInfo.bmiHeader.biSize = sizeof(BitmapInfo.bmiHeader);  
-   BitmapInfo.bmiHeader.biWidth = BitmapWidth;
-   BitmapInfo.bmiHeader.biHeight = -BitmapHeight;
-   BitmapInfo.bmiHeader.biPlanes = 1;
-   BitmapInfo.bmiHeader.biBitCount = 32;
-   BitmapInfo.bmiHeader.biCompression = BI_RGB;
-   
+   Buffer->Width = Width;
+   Buffer->Height = Height;
+   Buffer->BytesPerPixel = 4;
 
-   const int BytesPerPixel = 4;
-   int BitmapMemorySize = BytesPerPixel * BitmapWidth * BitmapHeight;
-
-   BitmapMemory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
-
+   if(Buffer->Memory) {
+      VirtualFree(Buffer->Memory, 0, MEM_RELEASE);
+   } 
+   
+   Buffer->Info.bmiHeader.biSize = sizeof(Buffer->Info.bmiHeader);  
+   Buffer->Info.bmiHeader.biWidth = Buffer->Width;
+   // -ve height forces the bitmap to draw top to bottom not the other way around, refer to documentation for further notes.
+   Buffer->Info.bmiHeader.biHeight = -Buffer->Height;
+   Buffer->Info.bmiHeader.biPlanes = 1;
+   Buffer->Info.bmiHeader.biBitCount = 32;
+   Buffer->Info.bmiHeader.biCompression = BI_RGB;
+   
+   
+   int BitmapMemorySize = (Buffer->BytesPerPixel) * (Buffer->Width) * (Buffer->Height);
+   
+   Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+   
+   int Pitch = Width * Buffer->BytesPerPixel;
    
 }
 internal void
-Win32UpdateWindow(HDC DeviceContext, RECT *WindowRect, int X, int Y, int Width, int Height) 
+Win32CopyBufferToWindow(HDC DeviceContext, RECT WindowRect, 
+                        Win32_buffer Buffer, int X,
+                        int Y, int Width, int Height) 
 {
-   int WindowWidth = WindowRect->right - WindowRect->left;
-   int WindowHeight = WindowRect->bottom - WindowRect->top;
+   int WindowWidth = WindowRect.right - WindowRect.left;
+   int WindowHeight = WindowRect.bottom - WindowRect.top;
 
    StretchDIBits(DeviceContext, 
-                 0, 0, BitmapWidth, BitmapHeight,
+                 0, 0, Buffer.Width, Buffer.Height,
                  0, 0, WindowWidth, WindowHeight,
                //   X, Y, Width, Height, 
                //   X, Y, Width, Height,
-                 BitmapMemory,
-                 &BitmapInfo,
+                 Buffer.Memory,
+                 &Buffer.Info,
                  DIB_RGB_COLORS, SRCCOPY);
 }
 
@@ -102,7 +111,7 @@ MainWindowCallback(HWND Window,
          GetClientRect(Window, &ClientRect);
          int Height = ClientRect.bottom - ClientRect.top;
          int Width = ClientRect.right - ClientRect.left;
-         Win32ResizeDIBSection(Width, Height);
+         Win32ResizeDIBSection(&BackBuffer, Width, Height);
       } break;
 
       case WM_DESTROY:
@@ -132,7 +141,7 @@ MainWindowCallback(HWND Window,
          int Y = Paint.rcPaint.top;
          int Height = Paint.rcPaint.bottom -= Paint.rcPaint.top;
          int Width = Paint.rcPaint.right -= Paint.rcPaint.left;
-         Win32UpdateWindow(DeviceContext, &ClientRect, X, Y, Width, Height);
+         Win32CopyBufferToWindow(DeviceContext, ClientRect, BackBuffer, X, Y, Width, Height);
          EndPaint(Window, &Paint);
       } break;
       default:
@@ -148,15 +157,19 @@ WinMain(HINSTANCE hInstance,
         LPSTR lpCmdLine,
         int nCmdShow)
 {
+   // WNDCLASS is a struct that defines a certain blueprint for your program.
+   // We used it to reference MainWindowCallback which is essential for the message we pop from the windows message q.
    WNDCLASS WindowClass = {};
-   WindowClass.style = CS_OWNDC;
+   // since we are going to strech the image to fit, we will need to redraw the entire thing instead of
+   // just redrawing the new part. 
+   WindowClass.style = CS_HREDRAW|CS_VREDRAW;
    WindowClass.lpfnWndProc = MainWindowCallback;
    WindowClass.hInstance = hInstance;
 //  WindowClass.hIcon = ;
    WindowClass.lpszClassName = "HandmadeHeroWindowClass";
    if (RegisterClass(&WindowClass)) 
    {
-      HWND WindowHandle = 
+      HWND Window = 
          CreateWindowEx(
          0,
          WindowClass.lpszClassName,
@@ -173,12 +186,14 @@ WinMain(HINSTANCE hInstance,
       
          
       MSG Message;
-      if(WindowHandle) 
+      if(Window) 
       {
-         int X_Offset = 0, Y_Offset = 0;
+         int X_Offset = 0;
+         int Y_Offset = 0;
          Running = true;
          while(Running)
          {
+            // PeekMessage is a non-blocking function instead of GetMessage()
             while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
             {
                if(Message.message == WM_QUIT) 
@@ -188,13 +203,13 @@ WinMain(HINSTANCE hInstance,
                TranslateMessage(&Message);
                DispatchMessage(&Message);
             }
-            HDC DeviceContext = GetDC(WindowHandle);
+            HDC DeviceContext = GetDC(Window);
             RECT ClientRect;
-            GetClientRect(WindowHandle, &ClientRect);
+            GetClientRect(Window, &ClientRect);
             int Width = ClientRect.right - ClientRect.left;
             int Height = ClientRect.bottom - ClientRect.top;
-            Win32UpdateWindow(DeviceContext, &ClientRect, 0, 0, Width, Height);
-            RenderPixels(X_Offset, Y_Offset);
+            Win32CopyBufferToWindow(DeviceContext, ClientRect, BackBuffer, 0, 0, Width, Height);
+            RenderPixels(BackBuffer, X_Offset, Y_Offset);
             X_Offset++;
          }  
       }
