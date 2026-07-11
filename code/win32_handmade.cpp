@@ -15,9 +15,27 @@ typedef struct win32_buffer {
    int BytesPerPixel;
 } Win32_buffer;
 
+typedef struct win32_window_dimension {
+   int Width;
+   int Height;
+} Win32_window_dimension;
+
+
 global_variable bool Running;
 global_variable Win32_buffer BackBuffer;
 
+internal
+Win32_window_dimension Win32GetWindowDimension(HWND Window) {
+
+   Win32_window_dimension Result;
+
+   RECT ClientRect;
+   GetClientRect(Window, &ClientRect);
+   Result.Height = ClientRect.bottom - ClientRect.top;
+   Result.Width = ClientRect.right - ClientRect.left;
+   
+   return (Result);
+} 
 
 internal void 
 RenderPixels(Win32_buffer Buffer, int X_Offset, int Y_Offset) {
@@ -63,7 +81,8 @@ Win32ResizeDIBSection(Win32_buffer *Buffer, int Width, int Height)
    
    Buffer->Info.bmiHeader.biSize = sizeof(Buffer->Info.bmiHeader);  
    Buffer->Info.bmiHeader.biWidth = Buffer->Width;
-   // -ve height forces the bitmap to draw top to bottom not the other way around, refer to documentation for further notes.
+   // -ve height forces the bitmap to draw top to bottom not the other way around.
+   // Refer to documentation for further info.
    Buffer->Info.bmiHeader.biHeight = -Buffer->Height;
    Buffer->Info.bmiHeader.biPlanes = 1;
    Buffer->Info.bmiHeader.biBitCount = 32;
@@ -74,20 +93,17 @@ Win32ResizeDIBSection(Win32_buffer *Buffer, int Width, int Height)
    
    Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
    
-   int Pitch = Width * Buffer->BytesPerPixel;
+   Buffer->Pitch = Width * Buffer->BytesPerPixel;
    
 }
 internal void
-Win32CopyBufferToWindow(HDC DeviceContext, RECT WindowRect, 
-                        Win32_buffer Buffer, int X,
-                        int Y, int Width, int Height) 
+Win32CopyBufferToWindow(HDC DeviceContext, int WindowWidth, int WindowHeight, 
+                        Win32_buffer Buffer) 
 {
-   int WindowWidth = WindowRect.right - WindowRect.left;
-   int WindowHeight = WindowRect.bottom - WindowRect.top;
-
+   // TODO: Update aspect ratio to stay the same after resizing
    StretchDIBits(DeviceContext, 
-                 0, 0, Buffer.Width, Buffer.Height,
-                 0, 0, WindowWidth, WindowHeight,
+               0, 0, WindowWidth, WindowHeight,
+               0, 0, Buffer.Width, Buffer.Height,
                //   X, Y, Width, Height, 
                //   X, Y, Width, Height,
                  Buffer.Memory,
@@ -106,12 +122,7 @@ MainWindowCallback(HWND Window,
    switch(Message)
    {
       case WM_SIZE:
-      {
-         RECT ClientRect;
-         GetClientRect(Window, &ClientRect);
-         int Height = ClientRect.bottom - ClientRect.top;
-         int Width = ClientRect.right - ClientRect.left;
-         Win32ResizeDIBSection(&BackBuffer, Width, Height);
+      {      
       } break;
 
       case WM_DESTROY:
@@ -132,16 +143,15 @@ MainWindowCallback(HWND Window,
       } break;
       case WM_PAINT:
       {
-         RECT ClientRect;
-         GetClientRect(Window, &ClientRect);
+         Win32_window_dimension Dimension;
+         Dimension = Win32GetWindowDimension(Window);         
 
          PAINTSTRUCT Paint;
          HDC DeviceContext = BeginPaint(Window, &Paint);
          int X = Paint.rcPaint.left;
          int Y = Paint.rcPaint.top;
-         int Height = Paint.rcPaint.bottom -= Paint.rcPaint.top;
-         int Width = Paint.rcPaint.right -= Paint.rcPaint.left;
-         Win32CopyBufferToWindow(DeviceContext, ClientRect, BackBuffer, X, Y, Width, Height);
+
+         Win32CopyBufferToWindow(DeviceContext, Dimension.Width, Dimension.Height, BackBuffer);
          EndPaint(Window, &Paint);
       } break;
       default:
@@ -162,8 +172,10 @@ WinMain(HINSTANCE hInstance,
    WNDCLASS WindowClass = {};
    // since we are going to strech the image to fit, we will need to redraw the entire thing instead of
    // just redrawing the new part. 
+   Win32ResizeDIBSection(&BackBuffer, 1280, 720);
    WindowClass.style = CS_HREDRAW|CS_VREDRAW;
    WindowClass.lpfnWndProc = MainWindowCallback;
+   // this is the pointer that contains that address of the process (the function)
    WindowClass.hInstance = hInstance;
 //  WindowClass.hIcon = ;
    WindowClass.lpszClassName = "HandmadeHeroWindowClass";
@@ -204,11 +216,10 @@ WinMain(HINSTANCE hInstance,
                DispatchMessage(&Message);
             }
             HDC DeviceContext = GetDC(Window);
-            RECT ClientRect;
-            GetClientRect(Window, &ClientRect);
-            int Width = ClientRect.right - ClientRect.left;
-            int Height = ClientRect.bottom - ClientRect.top;
-            Win32CopyBufferToWindow(DeviceContext, ClientRect, BackBuffer, 0, 0, Width, Height);
+            Win32_window_dimension Dimension;
+            Dimension = Win32GetWindowDimension(Window);
+                
+            Win32CopyBufferToWindow(DeviceContext, Dimension.Width, Dimension.Height, BackBuffer);
             RenderPixels(BackBuffer, X_Offset, Y_Offset);
             X_Offset++;
          }  
