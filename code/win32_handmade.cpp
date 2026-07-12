@@ -1,10 +1,10 @@
 #include <Windows.h>
 #include <stdint.h>
+#include <Xinput.h>
 
 #define internal static
 #define local static
 #define global_variable static 
-
 
 typedef struct win32_buffer {
    BITMAPINFO Info;
@@ -20,9 +20,39 @@ typedef struct win32_window_dimension {
    int Height;
 } Win32_window_dimension;
 
-
 global_variable bool Running;
 global_variable Win32_buffer BackBuffer;
+
+
+// Since we cannot use the XInput lib(due to its requirements)
+// We basically make a pointer to a function 
+// & We define the function to be the same as the original to avoid confusion
+// this pointer points to a stub function, otherwise it will cause an Access Violation
+
+// this replaces X_INPUT_GET_STATE(name) with the function signature,
+// that something and then the parameters.
+#define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
+typedef X_INPUT_GET_STATE(x_input_get_state);
+X_INPUT_GET_STATE(XInputGetStateStub) 
+{
+   return 0;
+} 
+
+global_variable x_input_get_state *XInputGetState_ = XInputGetStateStub;
+#define XInputGetState XInputGetState_
+
+#define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION *pVibration)
+typedef X_INPUT_SET_STATE(x_input_set_state);
+X_INPUT_SET_STATE(XInputSetStateStub) 
+{
+   return 0;
+} 
+
+global_variable x_input_set_state *XInputSetState_ = XInputSetStateStub;
+#define XInputSetState XInputSetState_
+
+
+
 
 internal
 Win32_window_dimension Win32GetWindowDimension(HWND Window) {
@@ -91,7 +121,7 @@ Win32ResizeDIBSection(Win32_buffer *Buffer, int Width, int Height)
    
    int BitmapMemorySize = (Buffer->BytesPerPixel) * (Buffer->Width) * (Buffer->Height);
    
-   Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+   Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE); 
    
    Buffer->Pitch = Width * Buffer->BytesPerPixel;
    
@@ -111,7 +141,7 @@ Win32CopyBufferToWindow(HDC DeviceContext, int WindowWidth, int WindowHeight,
                  DIB_RGB_COLORS, SRCCOPY);
 }
 
-LRESULT CALLBACK 
+internal LRESULT CALLBACK 
 MainWindowCallback(HWND Window,
                    UINT Message,
                    WPARAM wParam,
@@ -127,13 +157,13 @@ MainWindowCallback(HWND Window,
 
       case WM_DESTROY:
       {
-         // Has to be changed for an error later.
+         // TODO: Has to be changed for an error later.
          Running = false;
       } break;
 
       case WM_CLOSE: 
       {
-         // Has to be changed for a message later.
+         // TODO: Has to be changed for a message later.
          Running = false;
       } break;
 
@@ -152,6 +182,7 @@ MainWindowCallback(HWND Window,
          int Y = Paint.rcPaint.top;
 
          Win32CopyBufferToWindow(DeviceContext, Dimension.Width, Dimension.Height, BackBuffer);
+         // This tells windows that you have successfully repainted the part it asked you to.
          EndPaint(Window, &Paint);
       } break;
       default:
@@ -161,7 +192,7 @@ MainWindowCallback(HWND Window,
    }
    return(Result);
 }
-int CALLBACK 
+internal int CALLBACK 
 WinMain(HINSTANCE hInstance,
         HINSTANCE hPrevInstance,
         LPSTR lpCmdLine,
@@ -215,13 +246,43 @@ WinMain(HINSTANCE hInstance,
                TranslateMessage(&Message);
                DispatchMessage(&Message);
             }
+            for (DWORD ControllerIndex = 0; ControllerIndex < XUSER_MAX_COUNT; ControllerIndex++) 
+            {
+               XINPUT_STATE ControllerState;
+               if (XInputGetState(ControllerIndex, &ControllerState) == ERROR_SUCCESS) 
+               {
+                  // NOTE: The controller is plugged.
+                  XINPUT_GAMEPAD *Pad = &ControllerState.Gamepad;
+                  
+                  bool Up = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
+                  bool Down = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
+                  bool Left = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+                  bool Right = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
+                  bool Start = (Pad->wButtons & XINPUT_GAMEPAD_START);
+                  bool Back = (Pad->wButtons & XINPUT_GAMEPAD_BACK);
+                  bool LeftShoulder = (Pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
+                  bool RightShoulder = (Pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+                  bool A_Button = (Pad->wButtons & XINPUT_GAMEPAD_A);
+                  bool B_Button = (Pad->wButtons & XINPUT_GAMEPAD_B);
+                  bool X_Button = (Pad->wButtons & XINPUT_GAMEPAD_X);
+                  bool Y_Button = (Pad->wButtons & XINPUT_GAMEPAD_Y);
+
+                  int16_t StickX = Pad->sThumbLX;
+                  int16_t Sticky = Pad->sThumbLY;
+
+               }
+               else 
+               {
+                  // NOTE: The controller is not plugged.
+               }
+            }
             HDC DeviceContext = GetDC(Window);
             Win32_window_dimension Dimension;
             Dimension = Win32GetWindowDimension(Window);
                 
             Win32CopyBufferToWindow(DeviceContext, Dimension.Width, Dimension.Height, BackBuffer);
             RenderPixels(BackBuffer, X_Offset, Y_Offset);
-            X_Offset++;
+            
          }  
       }
    }
