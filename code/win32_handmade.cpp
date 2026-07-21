@@ -1,6 +1,7 @@
 #include <Windows.h>
 #include <stdint.h>
 #include <Xinput.h>
+#include <dsound.h>
 
 #define internal static
 #define local static
@@ -24,10 +25,11 @@ global_variable bool Running;
 global_variable Win32_buffer BackBuffer;
 
 
-// Since we cannot use the XInput lib(due to its requirements)
+// Since we cannot use the XInput lib(due to its requirements, and difficulty to meet)
 // We basically make a pointer to a function 
-// & We define the function to be the same as the original to avoid confusion
+// & We define the function to be the same as the original to avoid confusion (name)
 // this pointer points to a stub function, otherwise it will cause an Access Violation
+// (Accessing memory that is not ours, 0x0000000 I believe)
 
 // this replaces X_INPUT_GET_STATE(name) with the function signature,
 // that something and then the parameters.
@@ -35,7 +37,9 @@ global_variable Win32_buffer BackBuffer;
 typedef X_INPUT_GET_STATE(x_input_get_state);
 X_INPUT_GET_STATE(XInputGetStateStub) 
 {
-   return 0;
+   // 0 stands for ERROR_SUCCESS in windows world 
+   // So after looking at the documentation, ERROR_DEVICE_NOT_CONNECTED is better.
+   return (ERROR_DEVICE_NOT_CONNECTED);
 } 
 
 global_variable x_input_get_state *XInputGetState_ = XInputGetStateStub;
@@ -45,14 +49,103 @@ global_variable x_input_get_state *XInputGetState_ = XInputGetStateStub;
 typedef X_INPUT_SET_STATE(x_input_set_state);
 X_INPUT_SET_STATE(XInputSetStateStub) 
 {
-   return 0;
+   return (ERROR_DEVICE_NOT_CONNECTED);
 } 
 
 global_variable x_input_set_state *XInputSetState_ = XInputSetStateStub;
 #define XInputSetState XInputSetState_
 
+#define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPCGUID pcGuidDevice, LPDIRECTSOUND *ppDS, LPUNKNOWN pUnkOuter)
+typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
 
+internal void
+Win32LoadXInput(void) 
+{
+   // Basically we are loading the code of this library to get the location
+   // of GetState and SetState.
+   HMODULE XInputLibrary = LoadLibraryA("x_input1_4.dll");
+   // TODO: Check which version
+   if(!XInputLibrary) 
+      HMODULE XInputLibrary = LoadLibraryA("x_input1_3.dll");
+   
+   if (XInputLibrary) 
+   {
+      XInputGetState = (x_input_get_state *)GetProcAddress(XInputLibrary, "XInputGetState");
+      XInputSetState = (x_input_set_state *)GetProcAddress(XInputLibrary, "XInputSetState");
+   }
+}
+
+internal void
+Win32InitDSound(HWND Window, int32_t SamplesPerSecond, int32_t BufferSize) 
+{
+   HMODULE DSoundLibrary = LoadLibraryA("dsound.dll");
+   
+   if(DSoundLibrary) 
+   {
+      WAVEFORMATEX WaveFormat = {};
+         WaveFormat.wFormatTag = WAVE_FORMAT_PCM;
+         WaveFormat.nChannels = 2;
+         WaveFormat.nSamplesPerSec = SamplesPerSecond;
+         WaveFormat.nBlockAlign = (WaveFormat.nChannels * WaveFormat.wBitsPerSample) / 8;
+         WaveFormat.nAvgBytesPerSec = WaveFormat.nSamplesPerSec * WaveFormat.nBlockAlign;
+         WaveFormat.wBitsPerSample = 16;
+         WaveFormat.cbSize = 0;
+      direct_sound_create *DirectSoundCreate = 
+      (direct_sound_create *) GetProcAddress(DSoundLibrary, "DirectSoundCreate");
+      
+      LPDIRECTSOUND DirectSound; 
+      if(DirectSoundCreate && SUCCEEDED(DirectSoundCreate(0, &DirectSound, 0))) 
+      {
+         if (SUCCEEDED(DirectSound -> SetCooperativeLevel(Window, DSSCL_PRIORITY))) 
+         {
+            DSBUFFERDESC BufferDescription = {};
+            BufferDescription.dwSize = sizeof(BufferDescription);
+            BufferDescription.dwFlags = DSBCAPS_PRIMARYBUFFER;
+            BufferDescription.dwBufferBytes = 0;
+
+            LPDIRECTSOUNDBUFFER PrimaryBuffer;
+            if (SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDescription, &PrimaryBuffer, 0))) 
+            {
+                  if (SUCCEEDED(PrimaryBuffer->SetFormat(&WaveFormat)))
+                  {
+                     // NOTE: PrimaryBuffer Format is set.
+                  }
+                  else 
+                  {
+                     // TODO: Error - Diagnostic
+                  }
+            }
+         } 
+         else
+         {
+            // TODO: Error - Diagnostic
+         }
+         
+         DSBUFFERDESC BufferDescription = {};
+         BufferDescription.dwSize = sizeof(BufferDescription);
+         BufferDescription.dwFlags = 0;
+         BufferDescription.lpwfxFormat = &WaveFormat;
+         BufferDescription.dwBufferBytes = BufferSize;
+         LPDIRECTSOUNDBUFFER SecondaryBuffer;
+
+         if (SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDescription, &SecondaryBuffer, 0))) 
+         {
+            
+         }
+
+      }
+      else 
+      {
+         // TODO: Error - Diagnostic 
+      }
+   } 
+   else 
+   {
+      // TODO: Error - Diagnostic
+   }
+
+}
 
 internal
 Win32_window_dimension Win32GetWindowDimension(HWND Window) {
@@ -68,12 +161,12 @@ Win32_window_dimension Win32GetWindowDimension(HWND Window) {
 } 
 
 internal void 
-RenderPixels(Win32_buffer Buffer, int X_Offset, int Y_Offset) {
+RenderPixels(Win32_buffer *Buffer, int X_Offset, int Y_Offset) {
    
-   int Width = Buffer.Width;
-   int Height = Buffer.Height;
+   int Width = Buffer->Width;
+   int Height = Buffer->Height;
 
-   uint8_t *Row = (uint8_t *)Buffer.Memory;
+   uint8_t *Row = (uint8_t *)Buffer->Memory;
    for(int Y = 0; Y < Height; Y++) 
    {
       uint32_t *Pixel = (uint32_t *)Row;
@@ -82,7 +175,7 @@ RenderPixels(Win32_buffer Buffer, int X_Offset, int Y_Offset) {
       
       for (int X = 0; X < Width; X++) 
       {
-         if (((X / 32) + (Y / 32)) % 2 == 0) 
+         if ((((X + X_Offset) / 32) + ((Y + Y_Offset) / 32)) % 2 == 0)
          {
             *Pixel = 0xffffff;
             Pixel++;   
@@ -92,7 +185,7 @@ RenderPixels(Win32_buffer Buffer, int X_Offset, int Y_Offset) {
          }
          
       }
-      Row += Buffer.Pitch;
+      Row += Buffer->Pitch;
    }
 }
 
@@ -128,19 +221,23 @@ Win32ResizeDIBSection(Win32_buffer *Buffer, int Width, int Height)
 }
 internal void
 Win32CopyBufferToWindow(HDC DeviceContext, int WindowWidth, int WindowHeight, 
-                        Win32_buffer Buffer) 
+                        Win32_buffer *Buffer) 
 {
    // TODO: Update aspect ratio to stay the same after resizing
    StretchDIBits(DeviceContext, 
                0, 0, WindowWidth, WindowHeight,
-               0, 0, Buffer.Width, Buffer.Height,
+               0, 0, Buffer->Width, Buffer->Height,
                //   X, Y, Width, Height, 
                //   X, Y, Width, Height,
-                 Buffer.Memory,
-                 &Buffer.Info,
+                 Buffer->Memory,
+                 &Buffer->Info,
                  DIB_RGB_COLORS, SRCCOPY);
 }
 
+
+
+global_variable int X_Offset = 0;
+global_variable int Y_Offset = 0;
 internal LRESULT CALLBACK 
 MainWindowCallback(HWND Window,
                    UINT Message,
@@ -155,12 +252,41 @@ MainWindowCallback(HWND Window,
       {      
       } break;
 
+
       case WM_DESTROY:
       {
          // TODO: Has to be changed for an error later.
          Running = false;
       } break;
+      case WM_SYSKEYDOWN:
+      case WM_SYSKEYUP:
+      case WM_KEYDOWN:  
+      case WM_KEYUP:
+      {
+         uint32_t VKCode = wParam;
+         
+         if(VKCode == 'W') 
+         {
+            Y_Offset -=4 ;
+         }
+         else if(VKCode == 'A') 
+         {
+            X_Offset -= 4;
+         }
+         else if(VKCode == 'S') 
+         {
+            Y_Offset += 4;
+         }
+         else if(VKCode == 'D') 
+         {
+            X_Offset += 4;
+         }
 
+         bool AltKeyDown = ((lParam & (1 << 29)) != 0);
+         if ((VKCode == VK_F4) && AltKeyDown) 
+            Running = false;
+
+      } break;
       case WM_CLOSE: 
       {
          // TODO: Has to be changed for a message later.
@@ -180,8 +306,7 @@ MainWindowCallback(HWND Window,
          HDC DeviceContext = BeginPaint(Window, &Paint);
          int X = Paint.rcPaint.left;
          int Y = Paint.rcPaint.top;
-
-         Win32CopyBufferToWindow(DeviceContext, Dimension.Width, Dimension.Height, BackBuffer);
+        Win32CopyBufferToWindow(DeviceContext, Dimension.Width, Dimension.Height, &BackBuffer);
          // This tells windows that you have successfully repainted the part it asked you to.
          EndPaint(Window, &Paint);
       } break;
@@ -198,9 +323,11 @@ WinMain(HINSTANCE hInstance,
         LPSTR lpCmdLine,
         int nCmdShow)
 {
+
+   Win32LoadXInput();
    // WNDCLASS is a struct that defines a certain blueprint for your program.
    // We used it to reference MainWindowCallback which is essential for the message we pop from the windows message q.
-   WNDCLASS WindowClass = {};
+   WNDCLASSA WindowClass = {};
    // since we are going to strech the image to fit, we will need to redraw the entire thing instead of
    // just redrawing the new part. 
    Win32ResizeDIBSection(&BackBuffer, 1280, 720);
@@ -231,12 +358,13 @@ WinMain(HINSTANCE hInstance,
       MSG Message;
       if(Window) 
       {
-         int X_Offset = 0;
-         int Y_Offset = 0;
+         
          Running = true;
          while(Running)
          {
-            // PeekMessage is a non-blocking function instead of GetMessage()
+
+            Win32InitDSound(Window, 40000, 40000 * sizeof(int16_t) * 2);
+
             while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
             {
                if(Message.message == WM_QUIT) 
@@ -246,12 +374,14 @@ WinMain(HINSTANCE hInstance,
                TranslateMessage(&Message);
                DispatchMessage(&Message);
             }
-            for (DWORD ControllerIndex = 0; ControllerIndex < XUSER_MAX_COUNT; ControllerIndex++) 
+            // TODO: Make the performance better here.
+            // Sicne GetState wastes some CPU time by stalling.
+            for (DWORD ControllerIndex = 0; 
+               ControllerIndex < XUSER_MAX_COUNT; ControllerIndex++) 
             {
                XINPUT_STATE ControllerState;
                if (XInputGetState(ControllerIndex, &ControllerState) == ERROR_SUCCESS) 
                {
-                  // NOTE: The controller is plugged.
                   XINPUT_GAMEPAD *Pad = &ControllerState.Gamepad;
                   
                   bool Up = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
@@ -270,20 +400,26 @@ WinMain(HINSTANCE hInstance,
                   int16_t StickX = Pad->sThumbLX;
                   int16_t Sticky = Pad->sThumbLY;
 
+                  if(A_Button) 
+                  {
+                     Y_Offset += 2;
+                  }
                }
                else 
                {
                   // NOTE: The controller is not plugged.
                }
             }
+            RenderPixels(&BackBuffer, X_Offset, Y_Offset);
             HDC DeviceContext = GetDC(Window);
             Win32_window_dimension Dimension;
-            Dimension = Win32GetWindowDimension(Window);
-                
-            Win32CopyBufferToWindow(DeviceContext, Dimension.Width, Dimension.Height, BackBuffer);
-            RenderPixels(BackBuffer, X_Offset, Y_Offset);
             
-         }  
+            Dimension = Win32GetWindowDimension(Window);
+            
+            Win32CopyBufferToWindow(DeviceContext, Dimension.Width, Dimension.Height, &BackBuffer);
+            // X_Offset++;
+            // Y_Offset+=2;
+         }     
       }
    }
 
