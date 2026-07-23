@@ -23,6 +23,7 @@ typedef struct win32_window_dimension {
 
 global_variable bool Running;
 global_variable Win32_buffer BackBuffer;
+global_variable LPDIRECTSOUNDBUFFER SecondaryBuffer;
 
 
 // Since we cannot use the XInput lib(due to its requirements, and difficulty to meet)
@@ -91,10 +92,16 @@ Win32InitDSound(HWND Window, int32_t SamplesPerSecond, int32_t BufferSize)
          WaveFormat.nAvgBytesPerSec = WaveFormat.nSamplesPerSec * WaveFormat.nBlockAlign;
          WaveFormat.wBitsPerSample = 16;
          WaveFormat.cbSize = 0;
+         
+      // NOTE: Get a pointer to a function.
       direct_sound_create *DirectSoundCreate = 
       (direct_sound_create *) GetProcAddress(DSoundLibrary, "DirectSoundCreate");
       
       LPDIRECTSOUND DirectSound; 
+      // NOTE: Here we get back an object, the object has a vtable
+      // A vtable is a table that has a pointer to multiple function declerations 
+      // related to that object, making us use other functions off of DirectSound. (C++ feature )
+
       if(DirectSoundCreate && SUCCEEDED(DirectSoundCreate(0, &DirectSound, 0))) 
       {
          if (SUCCEEDED(DirectSound -> SetCooperativeLevel(Window, DSSCL_PRIORITY))) 
@@ -127,7 +134,6 @@ Win32InitDSound(HWND Window, int32_t SamplesPerSecond, int32_t BufferSize)
          BufferDescription.dwFlags = 0;
          BufferDescription.lpwfxFormat = &WaveFormat;
          BufferDescription.dwBufferBytes = BufferSize;
-         LPDIRECTSOUNDBUFFER SecondaryBuffer;
 
          if (SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDescription, &SecondaryBuffer, 0))) 
          {
@@ -411,14 +417,23 @@ WinMain(HINSTANCE hInstance,
                }
             }
             RenderPixels(&BackBuffer, X_Offset, Y_Offset);
+            DWORD WritePointer;
+            DWORD BytestoWrite;
+
+
+            VOID *Region1;
+            DWORD Region1Size;
+            VOID *Region2;
+            DWORD Region2Size;
+            SecondaryBuffer->Lock(WritePointer, BytestoWrite
+                                 &Region1, &Region1size,
+                                 &Region2, &Region2size, 
+                                 0);
+            
             HDC DeviceContext = GetDC(Window);
             Win32_window_dimension Dimension;
-            
             Dimension = Win32GetWindowDimension(Window);
-            
             Win32CopyBufferToWindow(DeviceContext, Dimension.Width, Dimension.Height, &BackBuffer);
-            // X_Offset++;
-            // Y_Offset+=2;
          }     
       }
    }
