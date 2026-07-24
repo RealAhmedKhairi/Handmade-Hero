@@ -89,9 +89,9 @@ Win32InitDSound(HWND Window, int32_t SamplesPerSecond, int32_t BufferSize)
          WaveFormat.wFormatTag = WAVE_FORMAT_PCM;
          WaveFormat.nChannels = 2;
          WaveFormat.nSamplesPerSec = SamplesPerSecond;
+         WaveFormat.wBitsPerSample = 16;
          WaveFormat.nBlockAlign = (WaveFormat.nChannels * WaveFormat.wBitsPerSample) / 8;
          WaveFormat.nAvgBytesPerSec = WaveFormat.nSamplesPerSec * WaveFormat.nBlockAlign;
-         WaveFormat.wBitsPerSample = 16;
          WaveFormat.cbSize = 0;
          
       // NOTE: Get a pointer to a function.
