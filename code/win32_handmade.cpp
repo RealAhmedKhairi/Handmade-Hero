@@ -24,7 +24,8 @@ typedef struct win32_window_dimension {
 global_variable bool Running;
 global_variable Win32_buffer BackBuffer;
 global_variable LPDIRECTSOUNDBUFFER SecondaryBuffer;
-
+global_variable int X_Offset = 0;
+global_variable int Y_Offset = 0;
 
 // Since we cannot use the XInput lib(due to its requirements, and difficulty to meet)
 // We basically make a pointer to a function 
@@ -104,7 +105,7 @@ Win32InitDSound(HWND Window, int32_t SamplesPerSecond, int32_t BufferSize)
 
       if(DirectSoundCreate && SUCCEEDED(DirectSoundCreate(0, &DirectSound, 0))) 
       {
-         if (SUCCEEDED(DirectSound -> SetCooperativeLevel(Window, DSSCL_PRIORITY))) 
+         if (SUCCEEDED(DirectSound->SetCooperativeLevel(Window, DSSCL_PRIORITY))) 
          {
             DSBUFFERDESC BufferDescription = {};
             BufferDescription.dwSize = sizeof(BufferDescription);
@@ -241,9 +242,6 @@ Win32CopyBufferToWindow(HDC DeviceContext, int WindowWidth, int WindowHeight,
 }
 
 
-
-global_variable int X_Offset = 0;
-global_variable int Y_Offset = 0;
 internal LRESULT CALLBACK 
 MainWindowCallback(HWND Window,
                    UINT Message,
@@ -364,12 +362,21 @@ WinMain(HINSTANCE hInstance,
       MSG Message;
       if(Window) 
       {
+         HDC DeviceContext = GetDC(Window);
+
+         int SamplesPerSecond = 40000;
+         int Hz = 256;
+         uint32_t RunningSampleIndex = 0;
+         int SquareWavePeriod = SamplesPerSecond / Hz;
+         int BytesPerSample = sizeof(int16_t) * 2;
+         int SecondaryBufferSize = SamplesPerSecond * BytesPerSample;
          
+         Win32InitDSound(Window, SamplesPerSecond, SecondaryBufferSize);
+         SecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
          Running = true;
          while(Running)
          {
-
-            Win32InitDSound(Window, 40000, 40000 * sizeof(int16_t) * 2);
+            
 
             while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
             {
@@ -417,20 +424,59 @@ WinMain(HINSTANCE hInstance,
                }
             }
             RenderPixels(&BackBuffer, X_Offset, Y_Offset);
-            DWORD WritePointer;
-            DWORD BytestoWrite;
+            
+            DWORD PlayCursor;
+            DWORD WriteCursor;
+            if(SUCCEEDED(SecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor)))
+            {
+            DWORD ByteToLock = RunningSampleIndex*BytesPerSample % SecondaryBufferSize;  
+            DWORD BytesToWrite;
+            if(ByteToLock > PlayCursor) 
+            {
+               BytesToWrite = SecondaryBufferSize -  ByteToLock;
+               BytesToWrite += PlayCursor;
+            }
+            else 
+            {
+               BytesToWrite = PlayCursor - ByteToLock;
+            }
 
 
             VOID *Region1;
             DWORD Region1Size;
             VOID *Region2;
             DWORD Region2Size;
-            SecondaryBuffer->Lock(WritePointer, BytestoWrite
-                                 &Region1, &Region1size,
-                                 &Region2, &Region2size, 
-                                 0);
-            
-            HDC DeviceContext = GetDC(Window);
+
+
+            if (SUCCEEDED(SecondaryBuffer->Lock(ByteToLock, BytesToWrite, 
+                                                &Region1, &Region1Size,
+                                                &Region2, &Region2Size, 
+                                                0))) 
+            {
+               int16_t *SampleOut = (int16_t *)Region1;
+               DWORD Region1SampleCount = Region1Size / BytesPerSample;
+               for(DWORD SampleIndex = 0;
+                  SampleIndex < Region1Size;
+                  SampleIndex++) 
+               {
+                  int16_t SampleValue = (((RunningSampleIndex / (SquareWavePeriod/2))) % 2) ? 16000 : -16000;
+                  *SampleOut++ = SampleValue;
+                  *SampleOut++ = SampleValue;
+                  RunningSampleIndex++;
+               }
+               SampleOut = (int16_t *)Region2;
+               DWORD Region2SampleCount = Region2Size / BytesPerSample;
+               for(DWORD SampleIndex = 0;
+                  SampleIndex < Region2Size;
+                  SampleIndex++) 
+               {
+                  int16_t SampleValue = (((RunningSampleIndex / (SquareWavePeriod/2))) % 2) ? 16000 : -16000;
+                  *SampleOut++ = SampleValue;
+                  *SampleOut++ = SampleValue;
+                  RunningSampleIndex++;
+               }
+            }
+         }
             Win32_window_dimension Dimension;
             Dimension = Win32GetWindowDimension(Window);
             Win32CopyBufferToWindow(DeviceContext, Dimension.Width, Dimension.Height, &BackBuffer);
